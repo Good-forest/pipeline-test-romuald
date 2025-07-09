@@ -69,11 +69,7 @@ def download_images(zone_name, roi, start_date, end_date):
         date = img.date().format('YYYY-MM-dd').getInfo()
         cloud_pct = img.get('CLOUDY_PIXEL_PERCENTAGE').getInfo()
         try:
-            # Classement dans le bon dossier selon le taux de nuages
-            if cloud_pct < 20:
-                out_dir = Path('data/raw/moins20')
-            else:
-                out_dir = Path('data/raw/20a60')
+            out_dir = Path('data/raw')
             out_dir.mkdir(parents=True, exist_ok=True)
             url = img.getDownloadURL({
                 'bands': BANDS,
@@ -115,7 +111,7 @@ def convert_random_tifs_to_png(raw_dir, out_dir, nb_samples=5):
 
 def main():
     today = datetime.today()
-    start_date = (today - timedelta(days=60)).strftime('%Y-%m-%d')
+    start_date = (today - timedelta(days=730)).strftime('%Y-%m-%d')  # 2 ans
     end_date = today.strftime('%Y-%m-%d')
     config_path = 'config/zones.yaml'
     zone_key = 'combre_valtin'
@@ -138,9 +134,7 @@ def main():
 
     logger.info("Téléchargement terminé pour tous les polygones")
 
-    # Conversion de 5 TIFF aléatoires en PNG pour vérification dans chaque dossier
-    convert_random_tifs_to_png('data/raw/moins20', 'data/png_samples/moins20', nb_samples=5)
-    convert_random_tifs_to_png('data/raw/20a60', 'data/png_samples/20a60', nb_samples=5)
+    # La conversion automatique en PNG a été supprimée ici
 
 if __name__ == '__main__':
     main()

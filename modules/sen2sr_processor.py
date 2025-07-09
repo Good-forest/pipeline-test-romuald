@@ -8,13 +8,8 @@ import mlstac
 import logging
 import platform
 
-try:
-    from sen2sr import predict_large
-except ImportError:
-    raise ImportError(
-        "Le module 'sen2sr' n'est pas installé. "
-        "Installe-le avec : pip install sen2sr mlstac git+https://github.com/ESDS-Leipzig/cubo.git"
-    )
+from sen2sr import predict_large  # Import direct
+from filter_valid_tifs import filter_valid_tifs  # Ajout de l'import du filtre
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -22,6 +17,7 @@ logger = logging.getLogger(__name__)
 MODEL_NAME = "SEN2SRLite_NonReference_RGBN_x4"
 MODEL_DIR = Path("models") / MODEL_NAME
 REQUIRED_BANDS = [1, 2, 3, 7]  # B02(1), B03(2), B04(3), B08(7)
+REQUIRED_TIF_BANDS = 13         # Nombre de bandes attendu pour filtrer
 
 def pad_to_multiple(img, multiple=128, mode='reflect'):
     bands, h, w = img.shape
@@ -147,15 +143,15 @@ def process_folder(model, device, raw_dir, processed_dir, comparison_dir):
     raw_dir = Path(raw_dir)
     processed_dir = Path(processed_dir)
     comparison_dir = Path(comparison_dir)
-    all_images = list(raw_dir.glob('*.tif'))
-    if not all_images:
-        logger.warning(f"Aucune image .tif trouvée dans {raw_dir}")
+    # Utiliser le filtre pour ne garder que les TIFF valides
+    valid_images = filter_valid_tifs(raw_dir, required_band_count=REQUIRED_TIF_BANDS)
+    if not valid_images:
+        logger.warning(f"Aucun fichier .tif valide trouvé dans {raw_dir}")
         return
-    selected_images = all_images  # Traite toutes les images
-    logger.info(f"{len(selected_images)} images sélectionnées dans {raw_dir}")
+    logger.info(f"{len(valid_images)} fichiers .tif valides sélectionnés dans {raw_dir}")
 
-    for i, img_path in enumerate(selected_images):
-        logger.info(f"\n[{i+1}/{len(selected_images)}] Traitement de {img_path.name}")
+    for i, img_path in enumerate(valid_images):
+        logger.info(f"\n[{i+1}/{len(valid_images)}] Traitement de {img_path.name}")
         processed_path, comparison_path = process_image(model, device, img_path, processed_dir, comparison_dir)
         if processed_path:
             logger.info(f"→ Résultat sauvegardé: {processed_path}")
@@ -169,18 +165,12 @@ def main():
         model, device = init_model()
         logger.info("Modèle initialisé avec succès")
 
-        # Traite toutes les images de chaque dossier
+        # Traite uniquement les fichiers .tif valides du dossier data/raw
         process_folder(
             model, device,
-            raw_dir='data/raw/moins20',
-            processed_dir='data/processed/moins20',
-            comparison_dir='data/comparisons/moins20'
-        )
-        process_folder(
-            model, device,
-            raw_dir='data/raw/20a60',
-            processed_dir='data/processed/20a60',
-            comparison_dir='data/comparisons/20a60'
+            raw_dir='data/raw',
+            processed_dir='data/processed',
+            comparison_dir='data/comparisons'
         )
 
     except Exception as e:
