@@ -5,16 +5,18 @@ from pathlib import Path
 import os
 from datetime import datetime
 import logging
+import geemap
 import numpy as np
 import rasterio  # Import manquant ajouté
 from skimage.transform import resize
+import geopandas as gpd
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-PROJECT_ID = 'tidy-bindery-461215-i7'
+PROJECT_ID = 'sentinel-yoan'
 MAX_CLOUD_COVER = 60  # Seuil de nuages fixé à 60%
 BANDS = [
     'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 
@@ -25,10 +27,11 @@ TARGET_SIZE = 128  # Taille fixe requise par SEN2SR
 # --- Initialisation Earth Engine ---
 def init_ee():
     try:
-        ee.Initialize(project=PROJECT_ID)
+        ee.Initialize(project='sentinel-yoan')
     except ee.EEException:
-        ee.Authenticate(auth_mode='notebook')
-        ee.Initialize(project=PROJECT_ID)
+
+        ee.Authenticate()
+        ee.Initialize(project='sentinel-yoan')
 
 # --- Fonctions utilitaires ---
 def load_config(config_path):
@@ -57,7 +60,7 @@ def download_images(zone_name, roi, start_date, end_date):
             # Téléchargement avec les 13 bandes SANS dimensions
             url = img.getDownloadURL({
                 'bands': BANDS,
-                'region': roi,
+                'region': roi.geometry(),
                 'scale': 10,
                 'format': 'GEO_TIFF'
             })
@@ -87,7 +90,10 @@ def resize_image(image_path):
     with rasterio.open(image_path) as src:
         data = src.read()
         meta = src.meta
-        
+    #save original as original_{image_path.name}
+    original_path = image_path.parent / f"original_{image_path.name}"
+    with rasterio.open(original_path, 'w', **meta) as dst:
+        dst.write(data)    
     # Redimensionnement
     resized_data = np.zeros((data.shape[0], TARGET_SIZE, TARGET_SIZE), dtype=data.dtype)
     for i in range(data.shape[0]):
@@ -107,12 +113,22 @@ def resize_image(image_path):
     
     logger.info(f"Image redimensionnée à {TARGET_SIZE}x{TARGET_SIZE}")
 
+def get_aoi_list(shapefiles_to_process, buffer):
+    gdf = gpd.read_file(shapefiles_to_process)
+    gdf['geometry'] = gdf['geometry'].buffer(0)
+    if not buffer:
+        return geemap.geopandas_to_ee(gdf)
+    gdf = gdf.dissolve().to_crs(epsg=3857)
+    gdf['geometry'] = gdf['geometry'].buffer(buffer).simplify(tolerance=buffer)
+    gdf = gdf.to_crs(epsg=4326)
+    return geemap.geopandas_to_ee(gdf)
+
 # Point d'entrée principal
 def main():
     # === MODIFIE ICI TES DATES ET LA ZONE ===
     start_date = '2025-06-01'
     end_date = '2025-06-15'
-    zone_name = 'combre_valtin'
+    zone_name = 'france_valley'
     config_path = 'config/zones.yaml'
     # ========================================
 
@@ -127,7 +143,8 @@ def main():
         return
     
     zone = config['zones'][zone_name]
-    roi = ee.Geometry.BBox(*zone['roi'])
+    roi = get_aoi_list(zone['cadastre'], 0)
+    # roi = ee.Geometry.BBox(*zone['roi'])
     
     # Création du dossier de sortie
     Path('data/raw').mkdir(parents=True, exist_ok=True)

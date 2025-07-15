@@ -1,0 +1,24 @@
+geedim==1.8.1
+geemap==0.34.4
+geopandas==1.0.1
+pyproj==3.3.1
+scikit-image
+tqdm
+shapely
+flask
+google-cloud-storage
+firebase-admin
+gunicorn
+colorama
+torch
+matplotlib
+pathlib
+rasterio
+mlstac
+requests
+sen2sr
+scikit-image
+
+# logging
+# platform
+
