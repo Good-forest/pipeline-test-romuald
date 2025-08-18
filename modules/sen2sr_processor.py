@@ -57,14 +57,27 @@ def init_model():
             output_dir=str(MODEL_DIR),
         )
 
-    # Initialisation du modèle
     logger.info(f"Utilisation du dispositif: {device}")
 
     model = mlstac.load(str(MODEL_DIR)).compiled_model(device=device)
     model.eval()
     return model, device
 
-def process_image(model, device, img_path):
+def fordead_processing(img_path, enhanced, meta):
+    date = img_path.name.split("_")[0]
+    folder = PROCESSED_DIR / date
+    folder.mkdir(parents=True, exist_ok=True)
+    for band in range(enhanced.shape[0]):
+        band_name = BANDS[band]
+        processed_path =  folder / f"SENTINEL2A_{date}_{band_name}.tif"
+        data = enhanced[band]
+
+        # add 1 dimension
+        data = data.reshape(1, data.shape[0], data.shape[1])
+        with rasterio.open(processed_path, 'w', **meta) as dst:
+            dst.write(data)
+
+def process_image(model, device, img_path, fordead_processing=False):
     """Traite une image complète avec gestion d'erreurs"""
     with rasterio.open(img_path) as src:
         raw_data = src.read()
@@ -84,26 +97,14 @@ def process_image(model, device, img_path):
 
     logger.info(f"Shape amélioré: {enhanced.shape}")
 
+    count = 1 if fordead_processing else enhanced.shape[0]
     meta.update({
         'dtype': 'float32',
-        # 'count': 1,
-        'count': enhanced.shape[0],
+        'count': count,
         'height': enhanced.shape[1],
         'width': enhanced.shape[2]
     })
 
-    # FORDEAD PRE_PROCESSING
-    # date = img_path.name.split("_")[0]
-    # folder = PROCESSED_DIR / date
-    # folder.mkdir(parents=True, exist_ok=True)
-    # for band in range(enhanced.shape[0]):
-    #     band_name = BANDS[band]
-    #     processed_path =  folder / f"SENTINEL2A_{date}_{band_name}.tif"
-    #     data = enhanced[band]
-    #     # add 1 dimension
-    #     data = data.reshape(1, data.shape[0], data.shape[1])
-    #     with rasterio.open(processed_path, 'w', **meta) as dst:
-    #         dst.write(data)
     processed_path = PROCESSED_DIR / img_path.name
     with rasterio.open(processed_path, 'w', **meta) as dst:
         dst.write(enhanced)
@@ -142,14 +143,13 @@ def create_rgb_comparison(raw_data, enhanced_data, output_path):
 
     plt.savefig(output_path, bbox_inches='tight', pad_inches=0.1, dpi=150)
     plt.close()
-    return True
 
-def main():
+def augment_images(zone_name):
     logger.info("Démarrage du traitement SEN2SR")
     model, device = init_model()
     logger.info("Modèle initialisé avec succès")
 
-    d = (RAW_DIR / "YOUR_ZONE_NAME").glob('*.tif')
+    d = (RAW_DIR / zone_name).glob('*.tif')
     all_images = list(d)
     selected_images = random.sample(all_images, min(SAMPLE_SIZE, len(all_images)))
     selected_images = all_images
@@ -164,4 +164,4 @@ def main():
             logger.info(f"→ Comparaison générée: {comparison_path}")
 
 if __name__ == "__main__":
-    main()
+    augment_images("YOUR_ZONE_NAME")

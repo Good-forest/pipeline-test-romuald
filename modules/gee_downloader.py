@@ -113,10 +113,16 @@ def treat_one(img, root, geometry):
     logger.info(f"✓ {filename} ({cloud_pct}% nuages)")
     return path
 
+# use multithreading
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+import multiprocessing
+from tqdm import tqdm
+
 def download_images(zone_name, roi, start_date, end_date):
     """Télécharge les images pour une période spécifique"""
     selected_tiles = ['31TDL']
-    bb = BANDS
+    bb = BANDS.copy()
     bb.append('SCL')
     collection = (ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
                   .select(bb)
@@ -135,7 +141,17 @@ def download_images(zone_name, roi, start_date, end_date):
     root = Path('data/raw') / zone_name
     root.mkdir(parents=True, exist_ok=True)
 
-    downloaded = [treat_one(Image(image_list.get(i)).clip(roi), root, roi.geometry()) for i in range(count)]
+    downloaded = []
+    workers = multiprocessing.cpu_count()
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(treat_one, Image(image_list.get(i)), root, roi.geometry())
+            for i in range(count)
+        ]
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing"):
+            downloaded.append(future.result())
+    # downloaded = [treat_one(Image(image_list.get(i)).clip(roi), root, roi.geometry()) for i in range(count)]
+
 
     return downloaded
 

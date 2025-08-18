@@ -4,6 +4,7 @@ import os
 from flask import Flask, request, jsonify
 from datetime import datetime
 from gee_downloader import download_images, init_ee, get_aoi_list
+from sen2sr_processor import augment_images
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -11,6 +12,16 @@ app = Flask(__name__)
 DATE_FORMAT="%Y-%m-%d"
 def parse_date(date_str):
     return datetime.strptime(date_str, DATE_FORMAT)
+
+@app.route("/sen2sr", methods=["POST"])
+def sen2sr():
+    zone_name = request.form.get('zone_name')
+
+    logger.info(f"Traitement de {zone_name}")
+    augment_images(zone_name)
+    logger.info(f"Traitement de {zone_name} terminé")
+    return jsonify({"status": "FullQueue"}), 200
+
 
 @app.route("/", methods=["POST"])
 def main():
