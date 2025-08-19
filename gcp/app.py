@@ -36,12 +36,13 @@ RAW_DIR = Path('data')
 @app.route("/upload", methods=["POST"])
 def upload():
     zone_name = request.form.get('zone_name')
+    if not zone_name: return jsonify(success=False), 400
     root_forest_folder_id = create_folder_rec(DRIVE_SERVICE, ['sen2sr', zone_name], DRIVE_FOLDER_ID)
 
-    for folder in (RAW_DIR / zone_name).iterdir():
-        print(folder)
-        forest_folder_id = create_folder_rec(DRIVE_SERVICE, [folder.name], root_forest_folder_id)
-        upload_files(DRIVE_SERVICE, folder, forest_folder_id)
+    # for folder in (RAW_DIR / zone_name).iterdir():
+    folder = RAW_DIR / zone_name / 'processed'
+    forest_folder_id = create_folder_rec(DRIVE_SERVICE, [folder.name], root_forest_folder_id)
+    upload_files(DRIVE_SERVICE, folder, forest_folder_id)
     return jsonify(success=True), 200
 
 @app.route("/sen2sr", methods=["POST"])
@@ -55,7 +56,6 @@ def sen2sr():
 
 @app.route("/", methods=["POST"])
 def main():
-    print(request)
     zone_name = request.form.get('zone_name')
     start_str = request.form.get('start_date')
     end_str = request.form.get('end_date')
@@ -64,7 +64,6 @@ def main():
     roi = request.files['roi']
     init_ee()
     roi_gdf = get_aoi_list(roi, buffer=0)
-
     logger.info(f"Traitement de {zone_name} ({start_date} à {end_date})")
 
     logger.info(f"Début du téléchargement pour {zone_name} ({start_date} à {end_date})")

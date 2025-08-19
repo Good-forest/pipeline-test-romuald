@@ -1,206 +1,140 @@
-import geemap
-import numpy as np
-import rasterio
+import ee
 import requests
-from skimage.transform import resize
-from ee import Image, ImageCollection, Filter, Reducer, EEException, Initialize, Authenticate
-from pathlib import Path
-import geopandas as gpd
-import logging
 import yaml
+import geopandas as gpd
+from pathlib import Path
+from datetime import datetime, timedelta
+import logging
+import random
+import rasterio
+import numpy as np
+import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-PROJECT_ID = 'sentinel-yoan'
-MAX_CLOUD_COVER = 60  # Seuil de nuages fixé à 60%
-
-# --- Configuration ---
-# BANDS = [
-#     'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 
-#     'B8', 'B8A', 'B9', 'B11', 'B12', 'AOT'
-# ]  # 13 bandes pour SEN2SR
-#
-BANDS=["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
-
-# LENGTH and WIDTH EQUAL | MORE than 128
-TARGET_SIZE = 128  # Taille fixe requise par SEN2SR
+PROJECT_ID = 'tidy-bindery-461215-i7'
+MAX_CLOUD_COVER = 60
+BANDS = [
+    'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 
+    'B8', 'B8A', 'B9', 'B11', 'B12', 'AOT'
+]
 
 def init_ee():
     try:
-        Initialize(project='sentinel-yoan')
-    except EEException:
-
-        Authenticate()
-        Initialize(project='sentinel-yoan')
+        ee.Initialize(project=PROJECT_ID)
+    except ee.EEException:
+        ee.Authenticate(auth_mode='notebook')
+        ee.Initialize(project=PROJECT_ID)
 
 def load_config(config_path):
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def filter_image(image, total_pixels: int, threshold: float, bands=None) -> bool:
-    """Pixel with too much black pixels are not considered."""
-    bands = bands[0] if bands is not None else "B2"
-    not_black_pixels = (
-        image.select(bands)
-        .reduceRegion(
-            bestEffort=True,
-            reducer=Reducer.count(),
-            geometry=image.geometry(),
-            scale=30)
-        .values()
-        .get(0)
-        .getInfo()
-    )
-    return (1 - not_black_pixels / total_pixels) <= threshold
-
-def get_pixels_count(image, band="B2"):
-    geometry = image.geometry()
-
-    if geometry is None:
-        geometry = image.geometry().bounds()
-        if geometry is None:
-            raise ValueError("Cannot determine a valid geometry for the image")
-
-    band = band
-    total_pixels = (
-        image.select(band).reduceRegion(
-            reducer=Reducer.count(),
-            geometry=geometry,
-            scale=30,
-            bestEffort=True,
-            maxPixels=1e13
-        ).values().get(0).getInfo()
-    )
-    return total_pixels
-
-def vegetation_bare_soil_mask(image: Image) -> Image:
-    """Create a vegetation mask from the Sentinel-2 image."""
-    scl = image.select("SCL")
-    mask = scl.eq(4).Or(scl.eq(5))
-    return image.updateMask(mask)
-
-from geemap import download_ee_image
-import os
-
-def save_image_locally(
-    image,
-    destination_folder,
-    filename,
-    aoi,
-    dtype = "int16",
-    crs = None,
-    crs_transform = None,
-    nodata_val = -32768
-) -> None:
-    download_ee_image(
-        image, filename, region=aoi, dtype=dtype, crs=crs, crs_transform=crs_transform, unmask_value=nodata_val,
-    )
-
-
-def treat_one(img, root, geometry):
-    date = img.date().format('YYYY-MM-dd').getInfo()
-    cloud_pct = img.get('CLOUDY_PIXEL_PERCENTAGE').getInfo()
-
-    # logger.info(f"Traitement de {date} ({cloud_pct}% nuages)")
-    image_cleaned = vegetation_bare_soil_mask(img)
-    total_pixels = get_pixels_count(image_cleaned)
-    if not filter_image(image_cleaned, total_pixels, threshold=0.6):
-        logger.info(f"Image filtrée: {date} ({cloud_pct}% nuages)")
-        return
-    
-    filename = f"{date}_{cloud_pct:.0f}p.tif"
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / filename
-    download_ee_image(image_cleaned, path, region=geometry)
-    resize_image(path)
-    logger.info(f"✓ {filename} ({cloud_pct}% nuages)")
-    return path
-
-# use multithreading
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing
-from tqdm import tqdm
+def get_roi_from_yaml(zone):
+    cadastre_path = Path(zone['cadastre'])
+    if cadastre_path.exists():
+        gdf = gpd.read_file(cadastre_path)
+        if gdf.crs is None:
+            gdf.set_crs(epsg=2154, inplace=True)
+        gdf = gdf.to_crs(epsg=4326)
+        polygons = []
+        for geom in gdf.geometry:
+            if geom.type == 'Polygon':
+                polygons.append(ee.Geometry.Polygon(list(geom.exterior.coords)))
+            elif geom.type == 'MultiPolygon':
+                for poly in geom.geoms:
+                    polygons.append(ee.Geometry.Polygon(list(poly.exterior.coords)))
+        if polygons:
+            logger.info(f"Utilisation du shapefile {cadastre_path}")
+            return polygons
+        else:
+            logger.warning(f"Aucun polygone trouvé dans {cadastre_path}, fallback sur bbox")
+    else:
+        logger.warning(f"Shapefile {cadastre_path} introuvable, fallback sur bbox")
+    bbox = zone['roi']
+    return [ee.Geometry.BBox(*bbox)]
 
 def download_images(zone_name, roi, start_date, end_date):
-    """Télécharge les images pour une période spécifique"""
-    selected_tiles = ['31TDL']
-    bb = BANDS.copy()
-    bb.append('SCL')
-    collection = (ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-                  .select(bb)
+    collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
                   .filterBounds(roi)
                   .filterDate(start_date, end_date)
-                  .filter(Filter.inList('MGRS_TILE', selected_tiles))
-                  .filter(Filter.lt('CLOUDY_PIXEL_PERCENTAGE', MAX_CLOUD_COVER))
-                  .sort("system:time_start", True)
-                  )
-
-    count = collection.size().getInfo()
-    image_list = collection.sort('CLOUDY_PIXEL_PERCENTAGE').toList(count)
-
-    logger.info(f"Trouvé {count} images pour {start_date} à {end_date} (max {MAX_CLOUD_COVER}% nuages)")
-
-    root = Path('data') / zone_name / 'raw'
-    root.mkdir(parents=True, exist_ok=True)
-
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', MAX_CLOUD_COVER)))
+    image_list = collection.sort('CLOUDY_PIXEL_PERCENTAGE').toList(100)
+    count = image_list.size().getInfo()
     downloaded = []
-    workers = multiprocessing.cpu_count()
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(treat_one, Image(image_list.get(i)), root, roi.geometry())
-            for i in range(count)
-        ]
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing"):
-            downloaded.append(future.result())
-    # downloaded = [treat_one(Image(image_list.get(i)).clip(roi), root, roi.geometry()) for i in range(count)]
+    logger.info(f"Trouvé {count} images pour {zone_name} ({start_date} à {end_date})")
+    for i in range(count):
+        img = ee.Image(image_list.get(i))
+        date = img.date().format('YYYY-MM-dd').getInfo()
+        cloud_pct = img.get('CLOUDY_PIXEL_PERCENTAGE').getInfo()
+        try:
+            out_dir = Path('data/raw')
+            out_dir.mkdir(parents=True, exist_ok=True)
+            url = img.getDownloadURL({
+                'bands': BANDS,
+                'region': roi,
+                'scale': 10,
+                'format': 'GEO_TIFF'
+            })
+            filename = f"{zone_name}_{date}_{cloud_pct:.0f}p.tif"
+            path = out_dir / filename
+            response = requests.get(url)
+            if response.status_code == 200:
+                path.write_bytes(response.content)
+                downloaded.append(path)
+                logger.info(f"✓ {filename} ({cloud_pct}% nuages, dossier: {out_dir.name})")
+            else:
+                logger.error(f"✗ Erreur {response.status_code} sur {filename}")
+        except Exception as e:
+            logger.error(f"⚠️ Erreur sur {date}: {str(e)}", exc_info=True)
     return downloaded
 
-def resize_data(data, size=TARGET_SIZE):
-    resized_data = np.zeros((data.shape[0], size, size), dtype=data.dtype)
-    for i in range(data.shape[0]):
-        resized_data[i] = resize(data[i], (size, size),
-                                 order=1, preserve_range=True, anti_aliasing=True)
-    return resized_data
+def convert_random_tifs_to_png(raw_dir, out_dir, nb_samples=5):
+    raw_dir = Path(raw_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tif_files = list(raw_dir.glob('*.tif'))
+    if not tif_files:
+        print("Aucun fichier .tif trouvé dans", raw_dir)
+        return
+    sample_files = random.sample(tif_files, min(nb_samples, len(tif_files)))
+    print(f"Conversion de {len(sample_files)} TIFF en PNG dans {out_dir} :")
+    for tif_path in sample_files:
+        with rasterio.open(tif_path) as src:
+            arr = src.read([1, 2, 3])
+            arr = np.clip((arr / np.percentile(arr, 99)) * 255, 0, 255).astype(np.uint8)
+            rgb = np.transpose(arr, (1, 2, 0))
+        png_path = out_dir / (tif_path.stem + '.png')
+        plt.imsave(png_path, rgb)
+        print("→", png_path)
 
-def get_new_meta(meta, size=TARGET_SIZE):
-    transform = rasterio.Affine(10, 0, meta['transform'][2],
-                                     0, -10, meta['transform'][5])
-    new_meta = {
-        'height': size,
-        'width': size,
-        'transform': transform
-    }
-    return new_meta
+def main():
+    today = datetime.today()
+    start_date = (today - timedelta(days=730)).strftime('%Y-%m-%d')  # 2 ans
+    end_date = today.strftime('%Y-%m-%d')
+    config_path = 'config/zones.yaml'
+    zone_key = 'combre_valtin'
 
-# original_path = image_path.parent / f"original_{image_path.name}"
-# with rasterio.open(original_path, 'w', **meta) as dst:
-#     dst.write(data)
-def resize_image(image_path, size=TARGET_SIZE):
-    with rasterio.open(image_path) as src:
-        data = src.read()
-        meta = src.meta
+    init_ee()
+    config = load_config(config_path)
+    if zone_key not in config['zones']:
+        logger.error(f"Zone '{zone_key}' non trouvée dans le fichier de configuration")
+        return
+    zone = config['zones'][zone_key]
 
-    size = max(meta['width'], meta['height'])
-    logger.info(f"Redimensionnement de {image_path} ({meta['width']}x{meta['height']} -> {size}x{size})")
+    Path('data/raw').mkdir(parents=True, exist_ok=True)
 
-    meta.update(get_new_meta(meta, size=size))
+    polygons = get_roi_from_yaml(zone)
+    logger.info(f"{len(polygons)} polygone(s) utilisé(s) pour la zone {zone_key}")
 
-    resized_data = resize_data(data, size=size)
-    with rasterio.open(image_path, 'w', **meta) as dst:
-        dst.write(resized_data)
+    for idx, roi in enumerate(polygons):
+        logger.info(f"Téléchargement pour polygone {idx+1}/{len(polygons)}")
+        download_images(f"{zone_key}_poly{idx+1}", roi, start_date, end_date)
 
-    logger.info(f"Image redimensionnée à {size}x{size}")
+    logger.info("Téléchargement terminé pour tous les polygones")
 
-def get_aoi_list(shapefiles_to_process, buffer):
-    gdf = gpd.read_file(shapefiles_to_process)
-    gdf['geometry'] = gdf['geometry'].buffer(0)
+    # La conversion automatique en PNG a été supprimée ici
 
-    if not buffer: return geemap.geopandas_to_ee(gdf)
-
-    gdf = gdf.dissolve().to_crs(epsg=3857)
-    gdf['geometry'] = gdf['geometry'].buffer(buffer).simplify(tolerance=buffer)
-    gdf = gdf.to_crs(epsg=4326)
-    return geemap.geopandas_to_ee(gdf)
-
-
+if __name__ == '__main__':
+    main()
