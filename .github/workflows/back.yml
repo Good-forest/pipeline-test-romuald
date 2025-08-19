@@ -36,7 +36,7 @@ jobs:
         uses: 'google-github-actions/auth@v2'
         with:
           project_id: 'sentinel-yoan'
-          workload_identity_provider: 'projects/171096874351/locations/global/workloadIdentityPools/github-deploy/providers/fordead'
+          workload_identity_provider: 'projects/171096874351/locations/global/workloadIdentityPools/github-deploy/providers/pipeline-test-romuald'
           service_account: 'cloud-function-deploy@sentinel-yoan.iam.gserviceaccount.com'
 
       - name: 'Set up Cloud SDK'
@@ -62,7 +62,7 @@ jobs:
 
       - name: Deploy to Google Cloud Run
         run: |
-          gcloud run deploy sentinel-to-bucket \
+          gcloud run deploy sen2sr \
           --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$TAG \
           --set-env-vars "MOUNT_PATH=$MOUNT_PATH" \
           --platform managed \
