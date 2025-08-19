@@ -61,7 +61,9 @@ def main():
     end_str = request.form.get('end_date')
     start_date = parse_date(start_str)
     end_date = parse_date(end_str)
-    roi = request.files['roi']
+    roi = request.files.get('roi')
+    if not roi:
+        return jsonify(success=False, error="'roi' file part is required"), 400
     init_ee()
     roi_gdf = get_aoi_list(roi, buffer=0)
     logger.info(f"Traitement de {zone_name} ({start_date} à {end_date})")
