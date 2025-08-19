@@ -1,11 +1,11 @@
 name: Sentinel GCP Function
-run-name: ${{ github.actor }} Deploy Sentinel GCP Function
+run-name: ${{ github.actor }} Deploy SEN2SR Function
 on:
   push:
     branches:
       - main
     paths:
-      - 'modules'
+      - 'gcp'
       - '.github/workflows/back.yml'
   workflow_dispatch:
 env:
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: modules
+        working-directory: gcp
     permissions:
       contents: 'read'
       id-token: 'write'
