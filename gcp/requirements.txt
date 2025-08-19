@@ -1,0 +1,30 @@
+google-cloud-storage
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+gunicorn
+flask
+geedim==1.8.1
+geemap==0.34.4
+geopandas==1.0.1
+pyproj==3.3.1
+tqdm
+shapely
+flask
+firebase-admin
+gunicorn
+colorama
+torch
+matplotlib
+pathlib
+rasterio
+mlstac
+requests
+sen2sr
+cubo
+scikit-image
+
+# logging
+# platform
+

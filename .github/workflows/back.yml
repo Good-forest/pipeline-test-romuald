@@ -1,0 +1,75 @@
+name: Sentinel GCP Function
+run-name: ${{ github.actor }} Deploy Sentinel GCP Function
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'modules'
+      - '.github/workflows/back.yml'
+  workflow_dispatch:
+env:
+  REGION: europe-west9
+  PROJECT_ID: sentinel-yoan
+  IMAGE: 'sentinel-to-bucket'
+  MOUNT_PATH: '/mnt/sen2sr'
+  TAG: 'latest'
+  BUCKET_NAME: 'yg_sentinel-bucket'
+  REPOSITORY: 'sen2sr'
+  SOURCEIMAGE: 'eu.gcr.io/sentinel-yoan/sen2sr'
+  PORT: 8080
+
+jobs:
+  cloud-function-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: modules
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: 'checkout'
+        uses: 'actions/checkout@v4'
+      - id: 'auth'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          project_id: 'sentinel-yoan'
+          workload_identity_provider: 'projects/171096874351/locations/global/workloadIdentityPools/github-deploy/providers/fordead'
+          service_account: 'cloud-function-deploy@sentinel-yoan.iam.gserviceaccount.com'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          version: '>= 363.0.0'
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker europe-west9-docker.pkg.dev
+
+      - name: Build Docker image
+        run: |
+          docker build -t $SOURCEIMAGE .
+
+      - name: Tag Docker image
+        run: |
+          docker tag $SOURCEIMAGE $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$TAG
+
+      - name: Push Docker image to Google Container Registry
+        run: |
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$TAG
+
+      - name: Deploy to Google Cloud Run
+        run: |
+          gcloud run deploy sentinel-to-bucket \
+          --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$TAG \
+          --set-env-vars "MOUNT_PATH=$MOUNT_PATH" \
+          --platform managed \
+          --region $REGION \
+          --port $PORT \
+          --timeout 3600s \
+          --max-instances 125 \
+          --concurrency 1 \
+          --cpu 8 \
+          --memory 16Gi
