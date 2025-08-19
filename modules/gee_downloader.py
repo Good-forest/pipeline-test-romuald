@@ -80,6 +80,24 @@ def vegetation_bare_soil_mask(image: Image) -> Image:
     mask = scl.eq(4).Or(scl.eq(5))
     return image.updateMask(mask)
 
+from geemap import download_ee_image
+import os
+
+def save_image_locally(
+    image,
+    destination_folder,
+    filename,
+    aoi,
+    dtype = "int16",
+    crs = None,
+    crs_transform = None,
+    nodata_val = -32768
+) -> None:
+    download_ee_image(
+        image, filename, region=aoi, dtype=dtype, crs=crs, crs_transform=crs_transform, unmask_value=nodata_val,
+    )
+
+
 def treat_one(img, root, geometry):
     date = img.date().format('YYYY-MM-dd').getInfo()
     cloud_pct = img.get('CLOUDY_PIXEL_PERCENTAGE').getInfo()
@@ -90,32 +108,17 @@ def treat_one(img, root, geometry):
     if not filter_image(image_cleaned, total_pixels, threshold=0.6):
         logger.info(f"Image filtrée: {date} ({cloud_pct}% nuages)")
         return
-    # logger.info(f"Traitement de {date} ({cloud_pct}% nuages) done")
-
-    url = image_cleaned.getDownloadURL({
-        'bands': BANDS,
-        'region': geometry,
-        'scale': 10,
-        'format': 'GEO_TIFF'
-    })
-
+    
     filename = f"{date}_{cloud_pct:.0f}p.tif"
+    root.mkdir(parents=True, exist_ok=True)
     path = root / filename
-
-    response = requests.get(url)
-
-    if response.status_code != 200:
-        raise Exception(f"Erreur de téléchargement de {date} ({cloud_pct}% nuages)")
-
-    logger.info(f"{path} ({cloud_pct}% nuages)")
-    path.write_bytes(response.content)
+    download_ee_image(image_cleaned, path, region=geometry)
     resize_image(path)
     logger.info(f"✓ {filename} ({cloud_pct}% nuages)")
     return path
 
 # use multithreading
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
 import multiprocessing
 from tqdm import tqdm
 
@@ -138,7 +141,7 @@ def download_images(zone_name, roi, start_date, end_date):
 
     logger.info(f"Trouvé {count} images pour {start_date} à {end_date} (max {MAX_CLOUD_COVER}% nuages)")
 
-    root = Path('data/raw') / zone_name
+    root = Path('data') / zone_name / 'raw'
     root.mkdir(parents=True, exist_ok=True)
 
     downloaded = []
@@ -151,8 +154,6 @@ def download_images(zone_name, roi, start_date, end_date):
         for future in tqdm(as_completed(futures), total=len(futures), desc="Processing"):
             downloaded.append(future.result())
     # downloaded = [treat_one(Image(image_list.get(i)).clip(roi), root, roi.geometry()) for i in range(count)]
-
-
     return downloaded
 
 def resize_data(data, size=TARGET_SIZE):

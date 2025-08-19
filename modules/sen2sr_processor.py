@@ -15,9 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-RAW_DIR = Path('data/raw') 
-PROCESSED_DIR = Path('data/processed')
-COMPARISON_DIR = Path('data/comparisons')
+ROOT_DIR = Path('data')
 MODEL_NAME = "SEN2SRLite/NonReference_RGBN_x4"
 
 MODEL_NAME = "SEN2SRLite"
@@ -35,9 +33,9 @@ REQUIRED_BANDS = [x for x in range(6)]
 BANDS=["B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"]
 
 # Création des dossiers
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
-PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-COMPARISON_DIR.mkdir(parents=True, exist_ok=True)
+# MODEL_DIR.mkdir(parents=True, exist_ok=True)
+# PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+# COMPARISON_DIR.mkdir(parents=True, exist_ok=True)
 
 def init_model():
     """Initialise le modèle avec gestion robuste des erreurs"""
@@ -63,21 +61,21 @@ def init_model():
     model.eval()
     return model, device
 
-def fordead_processing(img_path, enhanced, meta):
-    date = img_path.name.split("_")[0]
-    folder = PROCESSED_DIR / date
-    folder.mkdir(parents=True, exist_ok=True)
-    for band in range(enhanced.shape[0]):
-        band_name = BANDS[band]
-        processed_path =  folder / f"SENTINEL2A_{date}_{band_name}.tif"
-        data = enhanced[band]
+# def fordead_processing(img_path, enhanced, meta, zone_name):
+#     date = img_path.name.split("_")[0]
+#     folder = PROCESSED_DIR / zone_name / date
+#     folder.mkdir(parents=True, exist_ok=True)
+#     for band in range(enhanced.shape[0]):
+#         band_name = BANDS[band]
+#         processed_path =  folder / f"SENTINEL2A_{date}_{band_name}.tif"
+#         data = enhanced[band]
+#
+#         # add 1 dimension
+#         data = data.reshape(1, data.shape[0], data.shape[1])
+#         with rasterio.open(processed_path, 'w', **meta) as dst:
+#             dst.write(data)
 
-        # add 1 dimension
-        data = data.reshape(1, data.shape[0], data.shape[1])
-        with rasterio.open(processed_path, 'w', **meta) as dst:
-            dst.write(data)
-
-def process_image(model, device, img_path, fordead_processing=False):
+def process_image(zone_name, model, device, img_path, fordead_processing=False):
     """Traite une image complète avec gestion d'erreurs"""
     with rasterio.open(img_path) as src:
         raw_data = src.read()
@@ -105,11 +103,16 @@ def process_image(model, device, img_path, fordead_processing=False):
         'width': enhanced.shape[2]
     })
 
-    processed_path = PROCESSED_DIR / img_path.name
+    p_dir = ROOT_DIR / zone_name / 'processed'
+    p_dir.mkdir(parents=True, exist_ok=True)
+
+    processed_path = p_dir / img_path.name
     with rasterio.open(processed_path, 'w', **meta) as dst:
         dst.write(enhanced)
 
-    comparison_path = COMPARISON_DIR / f"comp_{img_path.stem}.png"
+    c_dir = ROOT_DIR / zone_name / 'comparisons'
+    c_dir.mkdir(parents=True, exist_ok=True)
+    comparison_path = c_dir / f"comp_{img_path.stem}.png"
     create_rgb_comparison(input_data, enhanced, comparison_path)
 
     return processed_path, comparison_path
@@ -149,19 +152,16 @@ def augment_images(zone_name):
     model, device = init_model()
     logger.info("Modèle initialisé avec succès")
 
-    d = (RAW_DIR / zone_name).glob('*.tif')
+    d = (ROOT_DIR / zone_name / 'raw').glob('*.tif')
     all_images = list(d)
     selected_images = random.sample(all_images, min(SAMPLE_SIZE, len(all_images)))
     selected_images = all_images
     logger.info(f"{len(selected_images)} images sélectionnées")
 
     for i, img_path in enumerate(selected_images):
-        logger.info(f"\n[{i+1}/{len(selected_images)}] Traitement de {img_path.name}")
-        processed_path, comparison_path = process_image(model, device, img_path)
+        logger.info(f"\n[{i+1}/{len(selected_images)}] Traitement de {img_path}")
+        processed_path, comparison_path = process_image(zone_name, model, device, img_path)
         if processed_path:
             logger.info(f"→ Résultat sauvegardé: {processed_path}")
         if comparison_path:
             logger.info(f"→ Comparaison générée: {comparison_path}")
-
-if __name__ == "__main__":
-    augment_images("YOUR_ZONE_NAME")

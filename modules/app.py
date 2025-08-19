@@ -5,6 +5,11 @@ from flask import Flask, request, jsonify
 from datetime import datetime
 from gee_downloader import download_images, init_ee, get_aoi_list
 from sen2sr_processor import augment_images
+from drive import upload_files, create_folder_rec
+
+from google.oauth2 import service_account
+
+from googleapiclient.discovery import build
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -13,18 +18,44 @@ DATE_FORMAT="%Y-%m-%d"
 def parse_date(date_str):
     return datetime.strptime(date_str, DATE_FORMAT)
 
+SCOPES = ["https://www.googleapis.com/auth/drive",
+          "https://www.googleapis.com/auth/gmail.send"]
+
+SERVICE_ACCOUNT_FILE = './credentials.json'
+def init_services():
+    credentials = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    delegated_credentials = credentials.with_subject('xavier.louchart@goodforest.fr')
+    drive_service = build('drive', 'v3', credentials=delegated_credentials)
+    return drive_service
+
+DRIVE_SERVICE = init_services()
+DRIVE_FOLDER_ID='1ozRSsiK0iAf4fxvGAMyAJnG49iOVgeil'
+RAW_DIR = Path('data') 
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    zone_name = request.form.get('zone_name')
+    root_forest_folder_id = create_folder_rec(DRIVE_SERVICE, ['sen2sr', zone_name], DRIVE_FOLDER_ID)
+
+    for folder in (RAW_DIR / zone_name).iterdir():
+        print(folder)
+        forest_folder_id = create_folder_rec(DRIVE_SERVICE, [folder.name], root_forest_folder_id)
+        upload_files(DRIVE_SERVICE, folder, forest_folder_id)
+    return jsonify(success=True), 200
+
 @app.route("/sen2sr", methods=["POST"])
 def sen2sr():
     zone_name = request.form.get('zone_name')
-
     logger.info(f"Traitement de {zone_name}")
     augment_images(zone_name)
     logger.info(f"Traitement de {zone_name} terminé")
-    return jsonify({"status": "FullQueue"}), 200
+    return jsonify(success=True), 200
 
 
 @app.route("/", methods=["POST"])
 def main():
+    print(request)
     zone_name = request.form.get('zone_name')
     start_str = request.form.get('start_date')
     end_str = request.form.get('end_date')
@@ -36,13 +67,11 @@ def main():
 
     logger.info(f"Traitement de {zone_name} ({start_date} à {end_date})")
 
-    Path('data/raw').mkdir(parents=True, exist_ok=True)
-
     logger.info(f"Début du téléchargement pour {zone_name} ({start_date} à {end_date})")
     files = download_images(zone_name, roi_gdf, start_date, end_date)
 
     logger.info(f"Téléchargement terminé: {len(files)} images sauvegardées")
-    return jsonify({"status": "FullQueue"}), 200
+    return jsonify(success=True), 200
 
 if __name__ != '__main__':
     gunicorn_logger = logging.getLogger('gunicorn.error')
